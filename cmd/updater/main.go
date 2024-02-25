@@ -98,21 +98,27 @@ func main() {
 
 func _main(ctx context.Context, reader *reader.Reader, args []string, logger log.LoggerInterface,
 	buildInfo models.BuildInformation, timeNow func() time.Time) (err error) {
-	if health.IsClientMode(args) {
-		// Running the program in a separate instance through the Docker
-		// built-in healthcheck, in an ephemeral fashion to query the
-		// long running instance of the program about its status
+	if len(args) > 1 {
+		switch args[1] {
+		case "version", "-version", "--version":
+			fmt.Println(buildInfo.VersionString())
+			return nil
+		case "healthcheck":
+			// Running the program in a separate instance through the Docker
+			// built-in healthcheck, in an ephemeral fashion to query the
+			// long running instance of the program about its status
 
-		var healthSettings config.Health
-		healthSettings.Read(reader)
-		healthSettings.SetDefaults()
-		err = healthSettings.Validate()
-		if err != nil {
-			return fmt.Errorf("health settings: %w", err)
+			var healthSettings config.Health
+			healthSettings.Read(reader)
+			healthSettings.SetDefaults()
+			err = healthSettings.Validate()
+			if err != nil {
+				return fmt.Errorf("health settings: %w", err)
+			}
+
+			client := health.NewClient()
+			return client.Query(ctx, *healthSettings.ServerAddress)
 		}
-
-		client := health.NewClient()
-		return client.Query(ctx, *healthSettings.ServerAddress)
 	}
 
 	announcementExp, err := time.Parse(time.RFC3339, "2023-07-15T00:00:00Z")
@@ -282,9 +288,12 @@ func _main(ctx context.Context, reader *reader.Reader, args []string, logger log
 
 	err = shutdownGroup.Shutdown(context.Background())
 	if err != nil {
+		exitHealthchecksio(hioClient, logger, healthchecksio.Exit1)
 		shoutrrrClient.Notify(err.Error())
 		return err
 	}
+
+	exitHealthchecksio(hioClient, logger, healthchecksio.Exit0)
 	return nil
 }
 
@@ -322,5 +331,13 @@ func backupRunLoop(ctx context.Context, done chan<- struct{}, backupPeriod time.
 			timer.Stop()
 			return
 		}
+	}
+}
+
+func exitHealthchecksio(hioClient *healthchecksio.Client,
+	logger log.LoggerInterface, state healthchecksio.State) {
+	err := hioClient.Ping(context.Background(), state)
+	if err != nil {
+		logger.Error(err.Error())
 	}
 }
